@@ -1,94 +1,111 @@
-import { CreateAndDrawCore, CreateAndDrawObjects } from "./functions.js";
-import { Point } from "./types.js";
+import { ConfigData, Point } from "./types.js";
 
-export const OBJECT_COUNT = 40000;
+// классифицируем объект -> с учетом априорной считаем по байесу
 
-const body = document.querySelector("body")!;
+// событие - Ck - объект относится к классу K
+// причина -
 
-export const objects = [] as Point[];
-export const cores = [] as Point[];
-export const HTMLObjects = [] as HTMLDivElement[];
-export const HTMLCores = [] as HTMLDivElement[];
+const configData = new ConfigData(100, 0.4, 0.6);
 
-CreateAndDrawObjects(OBJECT_COUNT);
-
-CreateAndDrawCore(
-  new Point(
-    Math.floor(Math.random() * (window.innerWidth - 10)),
-    Math.floor(Math.random() * (window.innerHeight - 10))
-  )
-);
-
-const iteration = (): void => {
-  // Вычисляем позицию нового ядра
-  const newCore = cores.reduce(
-    (acc, center, index) => {
-      const maxPoint = objects
-        .filter((point) => point.getIndex() === index)
-        .reduce(
-          (acc, point) => {
-            const distance = Math.sqrt(
-              (center.left - point.left) ** 2 + (center.top - point.top) ** 2
-            );
-
-            return distance > acc.distance
-              ? {
-                  distance,
-                  point,
-                }
-              : acc;
-          },
-          {
-            distance: Number.MIN_VALUE,
-            point: new Point(0, 0),
-          }
-        );
-      return maxPoint.distance > acc.distance ? maxPoint : acc;
-    },
-    {
-      distance: Number.MIN_VALUE,
-      point: new Point(0, 0),
-    }
+// Математическое ожидание
+const calculateExpVal = (j: number) => {
+  const data = configData.data[j];
+  return (
+    data.points.reduce((acc, curr) => (acc += curr), 0) / data.points.length
   );
-
-  // Условие появления нового ядра
-  let avgDistance = 0;
-  for (let i = 0; i < cores.length - 1; i++) {
-    for (let j = i + 1; j < cores.length; j++) {
-      avgDistance += Math.sqrt(
-        (cores[i].left - cores[j].left) ** 2 +
-          (cores[i].top - cores[j].top) ** 2
-      );
-    }
-  }
-  avgDistance = avgDistance / (cores.length * (cores.length - 1));
-
-  if (newCore.distance < avgDistance) {
-    window.alert(`${cores.length} clusters`);
-    window.location.reload();
-    clearInterval(handler);
-    return;
-  }
-
-  if (newCore.distance > 0) {
-    CreateAndDrawCore(newCore.point);
-  }
-
-  // Определяем принадлежность кластеру
-  objects.map((point, i) => {
-    let initDistance = Number.MAX_VALUE;
-
-    cores.map((center, j) => {
-      const distance = Math.sqrt(
-        (center.left - point.left) ** 2 + (center.top - point.top) ** 2
-      );
-      if (distance < initDistance) {
-        point.setIndex(j);
-        initDistance = distance;
-        HTMLObjects[i].style.backgroundColor = point.color;
-      }
-    });
-  });
 };
 
-const handler = setInterval(iteration, 1000);
+const expVals = [] as number[];
+expVals[0] = calculateExpVal(0);
+expVals[1] = calculateExpVal(1);
+
+// СКО
+const calculateStdDev = (j: number) => {
+  const data = configData.data[j];
+  return Math.sqrt(
+    data.points.reduce(
+      (acc, curr) => (acc += Math.pow(curr - expVals[j], 2)),
+      0
+    ) / data.points.length
+  );
+};
+
+const stdDevs = [] as number[];
+stdDevs[0] = calculateStdDev(0);
+stdDevs[1] = calculateStdDev(1);
+
+let Pxk = (x: number, j: number) => {
+  return (
+    (1 / (stdDevs[j] * Math.sqrt(2 * Math.PI))) *
+    Math.pow(Math.E, (-1 / 2) * Math.pow((x - expVals[j]) / stdDevs[j], 2))
+  );
+};
+
+const canvas = document.getElementById("canvas") as HTMLCanvasElement;
+canvas.width = 1000;
+canvas.height = 600;
+const ctx = canvas.getContext("2d")!;
+
+ctx.fillStyle = "rgb(0, 255, 0)";
+for (let i = 0; i < 1000; i++) {
+  const y = configData.data[0].probability * Pxk(i, 0) * 100000;
+  ctx.fillRect(i, 600 - y + 1, 1, 1);
+}
+
+ctx.fillStyle = "rgb(255, 0, 0)";
+for (let i = 0; i < 1000; i++) {
+  const y = configData.data[1].probability * Pxk(i, 1) * 100000;
+  ctx.fillRect(i, 600 - y + 1, 1, 1);
+}
+
+let zlt1 = 0;
+let zpo1 = 0;
+for (let i = 0; i < 1000; i++) {
+  const t1 = configData.data[0].probability * Pxk(i, 0);
+  const t2 = configData.data[1].probability * Pxk(i, 1);
+
+  if (t1 > t2) {
+    zlt1 += t2;
+  }
+
+  if (t2 > t1) {
+    zpo1 += t1;
+  }
+}
+
+let zlt2 = 0;
+let zpo2 = 0;
+for (let i = 0; i < 1000; i++) {
+  const t1 = configData.data[0].probability * Pxk(i, 0);
+  const t2 = configData.data[1].probability * Pxk(i, 1);
+
+  if (t2 > t1) {
+    zlt2 += t1;
+  }
+
+  if (t1 > t2) {
+    zpo2 += t2;
+  }
+}
+
+const dataC1 = `
+  <h2>Для класса 1:</h2>
+  <p>Зона ложной тревоги: ${zlt1}</p>
+  <p>Зона пропуска обнаружения: ${zpo1}</p>
+  <p>Суммарная ошибка классификации: ${zlt1 + zpo1}</p>
+`;
+
+const dataBlockC1 = document.createElement("div");
+dataBlockC1.innerHTML = dataC1;
+document.body.append(dataBlockC1);
+
+const dataC2 = `
+  <h2>Для класса 2:</h2>
+  <p>Зона ложной тревоги: ${zlt2}</p>
+  <p>Зона пропуска обнаружения: ${zpo2}</p>
+  <p>Суммарная ошибка классификации: ${zlt2 + zpo2}</p>
+`;
+
+const dataBlockC2 = document.createElement("div");
+dataBlockC2.innerHTML = dataC2;
+document.body.append(dataBlockC2);
